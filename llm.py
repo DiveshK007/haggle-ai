@@ -3,9 +3,27 @@ import requests
 import json
 from typing import Dict, Any, Optional
 from dotenv import load_dotenv
+from tenacity import retry, stop_after_attempt, wait_exponential
+from pydantic import ValidationError
+from schemas import VendorResponse
 
 # Load environment variables
 load_dotenv()
+
+def _with_retry(fn):
+    def wrapper(*args, **kwargs):
+        delays = [0.5, 1.0, 2.0]
+        last_err = None
+        for i in range(len(delays) + 1):
+            try:
+                return fn(*args, **kwargs)
+            except Exception as e:
+                last_err = e
+                if i < len(delays):
+                    print(f"[LLM RETRY] attempt {i + 1} failed: {e}. sleeping {delays[i]}s")
+                    time.sleep(delays[i])
+        raise last_err
+    return wrapper
 
 class LLMWrapper:
     """
@@ -35,9 +53,11 @@ class LLMWrapper:
         else:
             raise ValueError(f"Unsupported engine: {self.engine}. Use 'openai' or 'ollama'")
     
+    @retry(stop=stop_after_attempt(3), wait=wait_exponential(multiplier=1, min=4, max=10))
+    @_with_retry
     def generate(self, system_prompt: str, user_prompt: str, temperature: float = 0.7) -> str:
         """
-        Generate text using the configured LLM engine
+        Generate text using the configured LLM engine with retry logic.
         
         Args:
             system_prompt: System/role prompt
@@ -49,12 +69,20 @@ class LLMWrapper:
         """
         
         if self.engine == "openai":
-            return self._generate_openai(system_prompt, user_prompt, temperature)
+            response = self._generate_openai(system_prompt, user_prompt, temperature)
         elif self.engine == "ollama":
-            return self._generate_ollama(system_prompt, user_prompt, temperature)
+            response = self._generate_ollama(system_prompt, user_prompt, temperature)
         else:
             raise ValueError(f"Unknown engine: {self.engine}")
+
+        # Validate response against VendorResponse schema
+        try:
+            parsed_response = VendorResponse.model_validate_json(response)
+            return parsed_response.response  # Return the validated response
+        except (json.JSONDecodeError, ValidationError):
+            raise Exception("Invalid JSON response from LLM.")
     
+    @_with_retry
     def _generate_openai(self, system_prompt: str, user_prompt: str, temperature: float) -> str:
         """Generate using OpenAI API"""
         
@@ -74,6 +102,7 @@ class LLMWrapper:
         except Exception as e:
             raise Exception(f"OpenAI API error: {str(e)}")
     
+    @_with_retry
     def _generate_ollama(self, system_prompt: str, user_prompt: str, temperature: float) -> str:
         """Generate using local Ollama"""
         

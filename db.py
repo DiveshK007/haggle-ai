@@ -39,6 +39,17 @@ class Database:
                 )
             """)
             
+            # Negotiation events table - for funnel analysis
+            cursor.execute("""
+                CREATE TABLE IF NOT EXISTS negotiation_events (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    negotiation_id INTEGER NOT NULL,
+                    event_type TEXT NOT NULL,
+                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    FOREIGN KEY (negotiation_id) REFERENCES negotiations (id)
+                )
+            """)
+            
             # Negotiation threads table - for tracking ongoing negotiations
             cursor.execute("""
                 CREATE TABLE IF NOT EXISTS negotiation_threads (
@@ -319,8 +330,9 @@ class Database:
             cursor = conn.cursor()
             
             cursor.execute("DELETE FROM negotiations")
-            cursor.execute("DELETE FROM negotiation_threads") 
+            cursor.execute("DELETE FROM negotiation_threads")
             cursor.execute("DELETE FROM user_settings")
+            cursor.execute("DELETE FROM negotiation_events")
             
             conn.commit()
     
@@ -346,6 +358,35 @@ class Database:
                 stats['db_size_kb'] = 0
             
             return stats
+    
+    def log_event(self, negotiation_id: int, event_type: str) -> None:
+        """Log a negotiation event for funnel analysis"""
+        
+        with sqlite3.connect(self.db_path) as conn:
+            cursor = conn.cursor()
+            
+            cursor.execute("""
+                INSERT INTO negotiation_events (negotiation_id, event_type)
+                VALUES (?, ?)
+            """, (negotiation_id, event_type))
+            
+            conn.commit()
+            
+    def get_funnel_analysis(self) -> Dict[str, int]:
+        """Get negotiation funnel analysis"""
+        
+        with sqlite3.connect(self.db_path) as conn:
+            cursor = conn.cursor()
+            
+            cursor.execute("""
+                SELECT event_type, COUNT(*)
+                FROM negotiation_events
+                GROUP BY event_type
+            """)
+            
+            results = cursor.fetchall()
+            
+            return {row[0]: row[1] for row in results}
 
 # Utility functions for database management
 def backup_database(source_path: str = "haggle_ai.db", backup_path: str = None) -> str:
