@@ -1,9 +1,11 @@
 import json
 import random
 from typing import Dict, Any
+from pydantic import ValidationError
 
 from llm import LLMWrapper
-from prompts import SYSTEM_PROMPT, PROPOSAL_PROMPT, VENDOR_SIMULATION_PROMPT
+from prompts import SYSTEM_PROMPT, PROPOSAL_PROMPT, VENDOR_SIMULATION_PROMPT, FALLBACK_TEMPLATES
+from schemas import NegotiationProposal, VendorResponse, Debate
 
 class NegotiationAgent:
     """
@@ -12,6 +14,11 @@ class NegotiationAgent:
     
     def __init__(self):
         self.llm = LLMWrapper()
+    
+    def _parse_with_model(self, text: str, model_cls):
+        data = json.loads(text)
+        obj = model_cls(**data)   # raises ValidationError on mismatch
+        return obj
     
     def generate_proposals(self, context: Dict[str, Any]) -> Dict[str, Dict[str, str]]:
         """
@@ -31,39 +38,45 @@ class NegotiationAgent:
         strategies = ["polite", "firm", "term_swap"]
         
         for strategy in strategies:
-            try:
-                # Generate proposal for this strategy
-                prompt = PROPOSAL_PROMPT.format(
-                    context=context_str,
-                    strategy=strategy,
-                    past_price=context["past_price"],
-                    target_price=context["target_price"]
-                )
-                
-                response = self.llm.generate(
-                    system_prompt=SYSTEM_PROMPT,
-                    user_prompt=prompt
-                )
-                
-                # Parse the response (expecting JSON format)
+            for attempt in range(2):  # Retry up to 1 additional time
                 try:
-                    parsed_response = json.loads(response)
-                    proposals[strategy] = {
-                        "content": parsed_response.get("proposal", ""),
-                        "reasoning": parsed_response.get("reasoning", ""),
-                        "expected_outcome": parsed_response.get("expected_outcome", "")
-                    }
-                except json.JSONDecodeError:
-                    # Fallback if JSON parsing fails
-                    proposals[strategy] = {
-                        "content": response,
-                        "reasoning": f"Generated {strategy} negotiation approach",
-                        "expected_outcome": "Moderate success expected"
-                    }
+                    # Generate proposal for this strategy
+                    prompt = PROPOSAL_PROMPT.format(
+                        context=context_str,
+                        strategy=strategy,
+                        past_price=context["past_price"],
+                        target_price=context["target_price"]
+                    )
                     
-            except Exception as e:
-                # Fallback proposal in case of error
-                proposals[strategy] = self._get_fallback_proposal(strategy, context)
+                    raw = self.llm.generate(
+                        system_prompt=SYSTEM_PROMPT,
+                        user_prompt=prompt,
+                        temperature=0.65
+                    )
+                    
+                    obj = self._parse_with_model(raw, NegotiationProposal)
+                    proposals[strategy] = {
+                        "content": obj.proposal,
+                        "reasoning": obj.reasoning,
+                        "expected_outcome": obj.expected_outcome
+                    }
+                    break  # Exit retry loop on success
+
+                except (json.JSONDecodeError, ValidationError):
+                    if attempt == 1:  # Last attempt
+                        raw = self.llm.generate(
+                            system_prompt=SYSTEM_PROMPT,
+                            user_prompt=prompt + "\n\nReturn ONLY valid JSON with keys: proposal, reasoning, expected_outcome.",
+                            temperature=0.6
+                        )
+                        obj = self._parse_with_model(raw, NegotiationProposal)
+                        proposals[strategy] = {
+                            "content": obj.proposal,
+                            "reasoning": obj.reasoning,
+                            "expected_outcome": obj.expected_outcome
+                        }
+                    else:
+                        proposals[strategy] = self._get_fallback_proposal(strategy, context)
         
         return proposals
     
@@ -79,96 +92,87 @@ class NegotiationAgent:
             Dictionary containing vendor response and accepted price
         """
         
-        try:
-            # Format the simulation prompt
-            prompt = VENDOR_SIMULATION_PROMPT.format(
-                vendor_message=context["vendor_message"],
-                proposal=selected_proposal["content"],
-                original_price=context["past_price"],
-                target_price=context["target_price"],
-                service_type=context["service_type"],
-                relationship=context["relationship"]
-            )
-            
-            response = self.llm.generate(
-                system_prompt="You are simulating a vendor's response to a negotiation. Be realistic and consider business factors.",
-                user_prompt=prompt
-            )
-            
-            # Try to parse JSON response
+        for attempt in range(2):  # Retry up to 1 additional time
             try:
-                parsed_response = json.loads(response)
-                return {
-                    "content": parsed_response.get("response", ""),
-                    "accepted_price": parsed_response.get("accepted_price"),
-                    "reasoning": parsed_response.get("reasoning", ""),
-                    "success": parsed_response.get("success", False)
-                }
-            except json.JSONDecodeError:
-                # Fallback simulation
-                return self._get_fallback_vendor_response(context)
+                # Format the simulation prompt
+                prompt = VENDOR_SIMULATION_PROMPT.format(
+                    vendor_message=context["vendor_message"],
+                    proposal=selected_proposal["content"],
+                    original_price=context["past_price"],
+                    target_price=context["target_price"],
+                    service_type=context["service_type"],
+                    relationship=context["relationship"]
+                )
                 
-        except Exception as e:
-            # Fallback in case of error
-            return self._get_fallback_vendor_response(context)
+                raw = self.llm.generate(
+                    system_prompt="You are simulating a vendor's response to a negotiation. Be realistic and consider business factors.",
+                    user_prompt=prompt,
+                    temperature=0.5
+                )
+                
+                obj = self._parse_with_model(raw, VendorResponse)
+                return {
+                    "content": obj.response,
+                    "accepted_price": obj.accepted_price,
+                    "reasoning": obj.reasoning,
+                    "success": obj.success
+                }
+            except (json.JSONDecodeError, ValidationError):
+                if attempt == 1:  # Last attempt
+                    raw = self.llm.generate(
+                        system_prompt="You are simulating a vendor's response to a negotiation. Be realistic and consider business factors.",
+                        user_prompt=prompt + "\n\nReturn ONLY valid JSON with keys: response, accepted_price, reasoning, success.",
+                        temperature=0.45
+                    )
+                    obj = self._parse_with_model(raw, VendorResponse)
+                    return {
+                        "content": obj.response,
+                        "accepted_price": obj.accepted_price,
+                        "reasoning": obj.reasoning,
+                        "success": obj.success
+                    }
+        
+        return self._get_fallback_vendor_response(context)
     
     def _format_context(self, context: Dict[str, Any]) -> str:
         """Format context information for the LLM"""
         return f"""
-        Vendor Message: {context['vendor_message']}
-        Current/Past Price: ${context['past_price']}/month
-        Target Price: ${context['target_price']}/month
-        Service Type: {context['service_type']}
-        Relationship Length: {context['relationship']}
-        """
+<vendor_message>{context['vendor_message']}</vendor_message>
+<current_price>${context['past_price']}/month</current_price>
+<target_price>${context['target_price']}/month</target_price>
+<service_type>{context['service_type']}</service_type>
+<relationship_length>{context['relationship']}</relationship_length>
+"""
     
     def _get_fallback_proposal(self, strategy: str, context: Dict[str, Any]) -> Dict[str, str]:
-        """Generate fallback proposals when LLM fails"""
+        """Generate dynamic fallback proposals when LLM fails"""
         
-        fallback_proposals = {
-            "polite": {
-                "content": f"Hi there,\n\nThank you for the renewal notice. We've really valued our partnership over the years. Given our current budget constraints and the competitive landscape, I was wondering if there might be some flexibility in the pricing? We're hoping to find a solution that works for both of us - perhaps around ${context['target_price']}/month?\n\nI'd love to discuss this further. When would be a good time to chat?\n\nBest regards",
-                "reasoning": "Uses collaborative language and emphasizes the relationship while introducing budget constraints as a reason for the request.",
-                "expected_outcome": "Moderate success expected due to polite approach"
-            },
-            "firm": {
-                "content": f"Hello,\n\nI've received your renewal quote of ${context['past_price']}/month. Based on our research of current market rates and competitive offerings, this pricing is above what we can justify. We have budget approval for ${context['target_price']}/month for this service.\n\nCan you match this rate? If not, we'll need to evaluate other options.\n\nPlease let me know your thoughts by end of week.\n\nThanks",
-                "reasoning": "Direct approach that establishes a clear position with a deadline and consequence.",
-                "expected_outcome": "Higher success rate but may strain relationship"
-            },
-            "term_swap": {
-                "content": f"Hi,\n\nThanks for the renewal info. Instead of the current terms, would you consider ${context['target_price']}/month if we commit to a longer contract term? We could also discuss other value-adds like case studies, testimonials, or referrals that might justify a better rate.\n\nWhat creative options might work for both of us?\n\nLooking forward to your thoughts.",
-                "reasoning": "Offers alternative value propositions and longer commitment in exchange for better pricing.",
-                "expected_outcome": "Good success rate by providing vendor with added value"
-            }
-        }
+        target_price = context.get('target_price', 'a more competitive rate')
         
-        return fallback_proposals.get(strategy, fallback_proposals["polite"])
-    
-    def _get_fallback_vendor_response(self, context: Dict[str, Any]) -> Dict[str, Any]:
-        """Generate fallback vendor response when simulation fails"""
-        
-        original_price = context["past_price"]
-        target_price = context["target_price"]
-        
-        # Simulate realistic vendor behavior - usually meet somewhere in the middle
-        discount_percent = random.uniform(0.15, 0.35)  # 15-35% discount
-        accepted_price = int(original_price * (1 - discount_percent))
-        
-        # Don't go below target price too easily
-        if accepted_price < target_price:
-            accepted_price = int((target_price + original_price) / 2)
-        
-        responses = [
-            f"Thank you for reaching out. We value our partnership and understand your budget concerns. We can offer ${accepted_price}/month for this renewal. Would this work for you?",
-            f"I appreciate your business and loyalty. After reviewing your account, I can approve ${accepted_price}/month. This is our best offer given the value we provide.",
-            f"Let me see what I can do... I've spoken with my manager and we can accommodate ${accepted_price}/month for a valued client like you."
-        ]
+        proposals = FALLBACK_TEMPLATES.get(strategy, FALLBACK_TEMPLATES['polite'])
         
         return {
-            "content": random.choice(responses),
+            "content": f"{proposals['opening']} {proposals['transition']} {proposals['ask']} around ${target_price}/month.",
+            "reasoning": proposals['closing'],
+            "expected_outcome": "Vendor is likely to be receptive to a discussion."
+        }
+    
+    def _get_fallback_vendor_response(self, context: Dict[str, Any]) -> Dict[str, Any]:
+        """Generate a dynamic fallback vendor response when simulation fails"""
+        
+        original_price = context.get("past_price", 1000)
+        target_price = context.get("target_price", 800)
+        
+        # Simulate a realistic concession
+        concession = (original_price - target_price) * random.uniform(0.25, 0.75)
+        accepted_price = round(original_price - concession, 2)
+        
+        response_text = f"Thank you for your proposal. We can offer a revised rate of ${accepted_price}/month."
+        
+        return {
+            "content": response_text,
             "accepted_price": accepted_price,
-            "reasoning": "Simulated response offering partial discount",
+            "reasoning": "Fallback simulation with a partial concession.",
             "success": accepted_price < original_price
         }
     
@@ -221,9 +225,9 @@ class DebateOrchestrator:
                 user_prompt=debate_prompt
             )
             
-            return json.loads(response)
+            return Debate.model_validate_json(response).model_dump()
             
-        except Exception as e:
+        except (json.JSONDecodeError, ValidationError):
             # Fallback recommendation
             return {
                 "polite_argument": "Building relationships leads to long-term success",

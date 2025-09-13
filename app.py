@@ -86,6 +86,7 @@ if page == "Negotiate":
                     # Store in session state
                     st.session_state.proposals = proposals
                     st.session_state.context = context
+                    db.log_event(st.session_state.context.get("negotiation_id"), "proposals_generated")
                     
                 except Exception as e:
                     st.error(f"Error generating proposals: {str(e)}")
@@ -109,6 +110,7 @@ if page == "Negotiate":
             if st.button("📧 Use Polite Approach", key="polite"):
                 st.session_state.selected_proposal = proposals["polite"]
                 st.session_state.selected_strategy = "polite"
+                db.log_event(st.session_state.context.get("negotiation_id"), "strategy_selected")
         
         with tab2:
             st.subheader("Firm & Direct")
@@ -118,6 +120,7 @@ if page == "Negotiate":
             if st.button("📧 Use Firm Approach", key="firm"):
                 st.session_state.selected_proposal = proposals["firm"]
                 st.session_state.selected_strategy = "firm"
+                db.log_event(st.session_state.context.get("negotiation_id"), "strategy_selected")
         
         with tab3:
             st.subheader("Alternative Terms")
@@ -127,6 +130,7 @@ if page == "Negotiate":
             if st.button("📧 Use Term Swap", key="term_swap"):
                 st.session_state.selected_proposal = proposals["term_swap"]
                 st.session_state.selected_strategy = "term_swap"
+                db.log_event(st.session_state.context.get("negotiation_id"), "strategy_selected")
     
     # Simulate vendor response
     if 'selected_proposal' in st.session_state:
@@ -142,6 +146,7 @@ if page == "Negotiate":
                     )
                     
                     st.session_state.vendor_response = response
+                    db.log_event(st.session_state.context.get("negotiation_id"), "simulation_run")
                     
                 except Exception as e:
                     st.error(f"Error simulating response: {str(e)}")
@@ -180,7 +185,8 @@ if page == "Negotiate":
                         "vendor_message": st.session_state.context["vendor_message"][:200] + "..."
                     }
                     
-                    db.save_negotiation(negotiation_data)
+                    negotiation_id = db.save_negotiation(negotiation_data)
+                    db.log_event(negotiation_id, "negotiation_saved")
                     st.success("✅ Negotiation saved to database!")
                     
                     # Clear session state
@@ -231,6 +237,10 @@ elif page == "Dashboard":
                 'annual_savings': 'sum'
             }).round(0)
             st.dataframe(strategy_performance)
+            
+            st.subheader("Negotiation Funnel")
+            funnel_data = db.get_funnel_analysis()
+            st.bar_chart(funnel_data)
         
         # Recent negotiations table
         st.subheader("Recent Negotiations")

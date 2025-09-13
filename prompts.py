@@ -2,31 +2,52 @@
 VENDOR_SIMULATION_PROMPT = """
 You are simulating a realistic vendor response to a negotiation attempt.
 
-ORIGINAL VENDOR MESSAGE: {vendor_message}
-CUSTOMER'S NEGOTIATION PROPOSAL: {proposal}
+<context>
+  <vendor_message>{vendor_message}</vendor_message>
+  <customer_proposal>{proposal}</customer_proposal>
+  <original_price>${original_price}/month</original_price>
+  <target_price>${target_price}/month</target_price>
+  <service_type>{service_type}</service_type>
+  <relationship_length>{relationship}</relationship_length>
+</context>
 
-CONTEXT:
-- Original price: ${original_price}/month
-- Customer's target: ${target_price}/month  
-- Service type: {service_type}
-- Relationship length: {relationship}
+<instructions>
+  As a vendor, consider the following:
+  - Your margins and flexibility.
+  - The customer's value and the importance of retention.
+  - Competitive pressure and market rates.
+  - The length of the relationship and customer loyalty.
+  - Business pressures (e.g., end of quarter).
 
-As a vendor, consider:
-- Your margins and flexibility
-- Customer's value and retention importance
-- Competitive pressure and market rates
-- Relationship length and loyalty
-- Business pressures (end of quarter, etc.)
+  Your response must be a JSON object with the following structure:
+  ```json
+  {{
+      "response": "The vendor's email reply",
+      "accepted_price": 450,
+      "reasoning": "Why the vendor made this decision",
+      "success": true
+  }}
+  ```
 
-Respond in this JSON format:
-{{
-    "response": "The vendor's email reply",
-    "accepted_price": 450,
-    "reasoning": "Why the vendor made this decision", 
-    "success": true
-}}
+  Be realistic. Vendors typically concede 15–35% on the first reply; avoid going below target on the first hop unless justified.
+</instructions>
 
-Be realistic - vendors rarely accept first offers but often provide partial discounts for good customers.
+<example>
+  <input>
+    <vendor_message>Your renewal is coming up at $1000/month.</vendor_message>
+    <customer_proposal>We're looking for a rate closer to $800/month.</customer_proposal>
+  </input>
+  <output>
+  ```json
+  {{
+      "response": "Thanks for reaching out. We can offer a discounted rate of $900/month.",
+      "accepted_price": 900,
+      "reasoning": "Offered a 10% discount to retain a valued customer.",
+      "success": true
+  }}
+  ```
+  </output>
+</example>
 """
 
 # Prompt for multi-agent debate (stretch goal)
@@ -50,13 +71,14 @@ CONTEXT: {context}
 Have each agent make their case, then recommend the optimal approach for this specific situation.
 
 Respond in JSON format:
+```json
 {{
     "polite_argument": "Key points for collaborative approach",
-    "firm_argument": "Key points for direct approach", 
+    "firm_argument": "Key points for direct approach",
     "recommendation": "polite|firm|hybrid",
-    "reasoning": "Why this approach is best for this situation",
-    "hybrid_approach": "If hybrid, explain the combination strategy"
+    "reasoning": "Why this approach is best for this situation"
 }}
+```
 """
 
 # Prompt for market benchmark analysis (stretch goal)
@@ -128,11 +150,11 @@ def format_email_template(template_type: str, context: dict) -> str:
 
 {EMAIL_SIGNATURE}
 """
-    
+
     return email
-Prompts for the negotiation agent
-Contains system prompts and strategy-specific templates
-"""
+
+# Prompts for the negotiation agent
+# Contains system prompts and strategy-specific templates
 
 # Main system prompt for the negotiation agent
 SYSTEM_PROMPT = """You are an expert negotiation consultant with 20+ years of experience in B2B vendor negotiations. 
@@ -144,8 +166,46 @@ Your expertise includes:
 - Balancing relationship preservation with cost savings
 - Recognizing negotiation leverage and timing
 
-You always respond in valid JSON format when requested. Be professional, strategic, and realistic in your advice."""
+Always return ONLY valid JSON when requested. Do not include any prose outside JSON.
+"""
 
 # Prompt template for generating negotiation proposals
 PROPOSAL_PROMPT = """
-Analyze this negotiation scenario
+Analyze this negotiation scenario and generate a proposal following the specified strategy.
+
+<context>
+{context}
+</context>
+
+<strategy>
+{strategy}
+</strategy>
+
+<instructions>
+Your response must be a JSON object with the following structure:
+```json
+{{
+    "proposal": "The full text of the negotiation proposal.",
+    "reasoning": "The strategic reasoning behind this proposal.",
+    "expected_outcome": "What outcome is expected from this approach."
+}}
+```
+Return ONLY JSON with keys: proposal, reasoning, expected_outcome.
+Keep proposal ≤ 140 words. No invented facts.
+
+<example>
+  <input>
+    <context>Vendor is increasing the price from $500 to $600.</context>
+    <strategy>polite</strategy>
+  </input>
+  <output>
+  ```json
+  {{
+      "proposal": "We'd like to propose a renewal at $525/month.",
+      "reasoning": "A polite opening with a modest counter-offer.",
+      "expected_outcome": "The vendor is likely to accept or provide a further discount."
+  }}
+  ```
+  </output>
+</example>
+"""
