@@ -1,4 +1,5 @@
 import os
+import time
 import requests
 import json
 from typing import Dict, Any, Optional
@@ -30,7 +31,7 @@ class LLMWrapper:
     Wrapper class to handle both Ollama and OpenAI API calls
     Engine selection controlled by .env file
     """
-    
+
     def __init__(self):
         self.engine = os.getenv("ENGINE", "ollama").lower()
         
@@ -77,7 +78,10 @@ class LLMWrapper:
 
         # Validate response against VendorResponse schema
         try:
-            parsed_response = VendorResponse.model_validate_json(response)
+            if isinstance(response, str):
+                return response  # Return the string response directly
+            else:
+                parsed_response = VendorResponse.model_validate_json(response)
             return parsed_response.response  # Return the validated response
         except (json.JSONDecodeError, ValidationError):
             raise Exception("Invalid JSON response from LLM.")
@@ -96,8 +100,9 @@ class LLMWrapper:
                 temperature=temperature,
                 max_tokens=2000
             )
-            
-            return response.choices[0].message.content.strip()
+            raw_response = response.choices[0].message.content.strip()
+            print(f"[LLM RESPONSE] Raw response: {raw_response}")  # Log the raw response
+            return raw_response
             
         except Exception as e:
             raise Exception(f"OpenAI API error: {str(e)}")
@@ -128,7 +133,9 @@ class LLMWrapper:
             
             if response.status_code == 200:
                 result = response.json()
-                return result["response"].strip()
+                raw_response = result["response"].strip()
+                print(f"[LLM RESPONSE] Raw response: {raw_response}")  # Log the raw response
+                return raw_response
             else:
                 raise Exception(f"Ollama API returned status {response.status_code}: {response.text}")
                 

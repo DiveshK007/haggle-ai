@@ -20,6 +20,11 @@ An AI-powered negotiation assistant that helps you get better deals from vendors
 - **Either:**
   - Local Ollama installation with `llama3.1:8b` model, **OR**
   - OpenAI API key
+- **For Voice Transcription (Optional):**
+  - **FFmpeg**: Required for audio processing.
+    - **macOS**: `brew install ffmpeg`
+    - **Ubuntu/Debian**: `sudo apt update && sudo apt install ffmpeg`
+    - **Windows**: Download from [ffmpeg.org](https://ffmpeg.org/download.html)
 
 ## 🛠️ Quick Setup
 

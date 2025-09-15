@@ -5,7 +5,7 @@ from pydantic import ValidationError
 
 from llm import LLMWrapper
 from prompts import SYSTEM_PROMPT, PROPOSAL_PROMPT, VENDOR_SIMULATION_PROMPT, FALLBACK_TEMPLATES
-from schemas import NegotiationProposal, VendorResponse, Debate
+from schemas import NegotiationProposal, VendorResponse  # Removed Debate
 
 class NegotiationAgent:
     """

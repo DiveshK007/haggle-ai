@@ -250,6 +250,27 @@ class Database:
                 return result
             
             return None
+
+    def get_all_negotiation_threads(self) -> List[Dict[str, Any]]:
+        """Retrieve all active negotiation threads"""
+        
+        with sqlite3.connect(self.db_path) as conn:
+            conn.row_factory = sqlite3.Row
+            cursor = conn.cursor()
+            
+            cursor.execute("""
+                SELECT * FROM negotiation_threads
+                WHERE status = 'active'
+                ORDER BY updated_at DESC
+            """)
+            
+            rows = cursor.fetchall()
+            threads = []
+            for row in rows:
+                thread = dict(row)
+                thread['context'] = json.loads(thread['context'])
+                threads.append(thread)
+            return threads
     
     def update_user_setting(self, key: str, value: str) -> None:
         """Update or insert a user setting"""
